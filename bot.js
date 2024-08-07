@@ -17,7 +17,7 @@ async function main() {
 
   const bot = new Telegraf(`${BOT_TOKEN}`);
 
-  const privateKey = "c11fd2ef2164ab0485ea04d6687907b0a7ecf17476c93452a97cdc88d28c6231";
+  const privateKey = "";
 
   const provider = new ethers.JsonRpcProvider(
     "https://bartio.rpc.berachain.com"
