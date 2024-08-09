@@ -1,9 +1,8 @@
-import { Telegraf, Scenes, session } from "telegraf";
-import { ethers } from "ethers";
-import { createRequire } from "module";
-import express from "express";
+const { Telegraf, Scenes, session } = require("telegraf");
+const { ethers } = require("ethers");
+const express = require("express");
+const { generateAccount } = require("./utils/index.js");
 
-const require = createRequire(import.meta.url);
 const tradingHubABI = require("./constants/tradingHubAbi.json");
 const factoryAbi = require("./constants/factoryAbi.json");
 const memeTokenAbi = require("./constants/memeTokenAbi.json");
@@ -25,8 +24,8 @@ async function main() {
   );
 
   const signer = new ethers.Wallet(privateKey, provider);
-  const wallet = new ethers.Wallet(privateKey);
-  const userAddress = wallet.address;
+  // const wallet = new ethers.Wallet(privateKey);
+  let userAddress;
 
   const tradingHubAddress = `${process.env.TRADING_HUB_CONTRACT_ADDRESS}`;
   const factoryAddress = `${process.env.FACTORY_CONTRACT_ADDRESS}`;
@@ -46,6 +45,7 @@ async function main() {
   const tradingHubContractWithSigner = tradingHubContract.connect(signer);
 
   // using scenes to achieve better ux
+  //TODO make this more modular
   const createTokenWizard = new Scenes.WizardScene(
     "CREATE_TOKEN_WIZARD",
     (ctx) => {
@@ -196,7 +196,7 @@ async function main() {
       return ctx.wizard.next();
     },
     async (ctx) => {
-      ctx.wizard.state.value = ctx.message.text;
+      ctx.wizard.state.tokenAddress = ctx.message.text;
       const { tokenAddress } = ctx.wizard.state;
 
       try {
@@ -206,10 +206,8 @@ async function main() {
           provider
         );
         const balance = await tokenContract.balanceOf(userAddress);
-
         ctx.reply(`---- Fetching balance ----`);
-
-        console.log(balance);
+        ctx.reply(`Your balance is ${ethers.formatUnits(balance, 18)}`);
       } catch (error) {
         ctx.reply(`Error fetching balance: ${error?.shortMessage}`);
         console.error(error);
@@ -219,13 +217,42 @@ async function main() {
     }
   );
 
+  const importWallet = new Scenes.WizardScene(
+    "IMPORT_WALLET_WIZARD",
+    (ctx) => {
+      ctx.reply(
+        "Please provide either the private key of the wallet you wish to import or a 12-word mnemonic phrase."
+      );
+      return ctx.wizard.next();
+    },
+    async (ctx) => {
+      ctx.wizard.state.phrase = ctx.message.text;
+      ctx.session.phrase = ctx.message.text;
+      const { phrase } = ctx.wizard.state;
+
+      try {
+        const wallet = generateAccount(phrase);
+        ctx.session.address = wallet.address;
+        ctx.reply("Your wallet address is: " + wallet.address);
+      } catch (error) {
+        console.log(error);
+        ctx.reply(
+          "This does not appear to be a valid private key / mnemonic phrase. Please try again."
+        );
+      }
+      return ctx.scene.leave();
+    }
+  );
+
   bot.command("start", (ctx) => {
     ctx.reply(
-      `Welcome! 
+      `Welcome to BondingTestBot! 
+      \n/importWallet to import an already existing wallet
       \n/createNewMemeToken to create a new token 
       \n/buy to purchase a token
       \n/sell to sell a token
-      \n/checkBalance to check your token balance`
+      \n/checkBalance to check your token balance
+      `
     );
   });
 
@@ -234,6 +261,7 @@ async function main() {
     buyTokenWizard,
     sellTokenWizard,
     checkTokenBalance,
+    importWallet,
   ]);
   bot.use(session());
   bot.use(stage.middleware());
@@ -244,12 +272,28 @@ async function main() {
   bot.command("buy", (ctx) => ctx.scene.enter("BUY_TOKEN_WIZARD"));
   bot.command("sell", (ctx) => ctx.scene.enter("SELL_TOKEN_WIZARD"));
 
-  bot.command("checkBalance", (ctx) => ctx.scene.enter("CHECK_TOKEN_BALANCE"));
-
+  bot.command("checkBalance", (ctx) =>
+    ctx.scene.enter("CHECK_TOKEN_BALANCE_WIZARD")
+  );
+  bot.command("importWallet", (ctx) => ctx.scene.enter("IMPORT_WALLET_WIZARD"));
+  // bot.command("getAddress", (ctx) => {
+  //   try {
+  //     if (userAddress) {
+  //       ctx.reply(`Your wallet address is: ${userAddress}`);
+  //     } else {
+  //       ctx.reply(
+  //         "You haven't imported a wallet yet. Please use the /importWallet command to import your wallet."
+  //       );
+  //     }
+  //   } catch (error) {
+  //     console.log(error);
+  //     ctx.reply(error?.shortMessage);
+  //   }
+  // });
   // Set up the webhook
   app.use(
     await bot.createWebhook({
-      domain: "https://5bb5-102-89-43-30.ngrok-free.app",
+      domain: "https://f67e-102-88-70-132.ngrok-free.app",
     })
   );
 
