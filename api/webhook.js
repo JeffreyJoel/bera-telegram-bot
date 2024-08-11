@@ -14,18 +14,16 @@ const memeTokenAbi = require("../constants/memeTokenAbi.json");
 
 require("dotenv").config();
 
-const app = express();
-
 async function main() {
   const BOT_TOKEN = process.env.BOT_TOKEN;
   const PORT = 8080;
 
   const bot = new Telegraf(`${BOT_TOKEN}`);
 
-  const privateKey = `${process.env.PRIVATE_KEY}`;
+  // const privateKey = `${process.env.PRIVATE_KEY}`;
 
   const provider = new ethers.JsonRpcProvider(
-    "https://bera-testnet.nodeinfra.com"
+    "https://bartio.rpc.berachain.com"
   );
 
   // const signer = new ethers.Wallet(privateKey, provider);
@@ -82,64 +80,68 @@ async function main() {
     },
 
     async (ctx) => {
-      ctx.wizard.state.liquidity = ctx.message.text;
-      const { tokenName, symbol, liquidity } = ctx.wizard.state;
+      ctx.wizard.state.value = ctx.message.text;
+      const { tokenName, symbol, value } = ctx.wizard.state;
 
       try {
         const signer = validateAndGetSigner(ctx, provider);
         const factoryContractWithSigner = factoryContract.connect(signer);
-        const liquidityToSend = ethers.parseEther(`${liquidity}`);
+        const valueToSend = ethers.parseEther(`${value}`);
         const createMemeTx = await factoryContractWithSigner.createNewMeme(
           tokenName,
           symbol,
           {
-            value: liquidityToSend,
+            value: valueToSend,
           }
         );
+        console.log(createMemeTx);
+
         ctx.reply(`--- Creating ${tokenName} token ----`);
-        // const receipt = await createMemeTx.wait();
+        const receipt = await createMemeTx.wait();
 
-        const eventSignature =
-          "0x01fb0165fee40718cec1862fc8dd2dbd6fc0fdef7623971ac15ffd2daf21b986";
-        const filter = {
-          address: factoryContract.address,
-          topics: [eventSignature],
-        };
+        // const eventSignature =
+        //   "0x01fb0165fee40718cec1862fc8dd2dbd6fc0fdef7623971ac15ffd2daf21b986";
+        // const filter = {
+        //   address: factoryContract.address,
+        //   topics: [eventSignature],
+        // };
 
-        const tokenCreatedPromise = new Promise((resolve, reject) => {
-          provider.once(filter, (log) => {
-            const tokenAddress = ethers.getAddress(
-              "0x" + log.topics[1].slice(26)
-            );
-            const creatorAddress = ethers.getAddress(
-              "0x" + log.topics[2].slice(26)
-            );
-            resolve({ tokenAddress, creatorAddress });
-          });
+        // const tokenCreatedPromise = new Promise((resolve, reject) => {
+        //   provider.once(filter, (log) => {
+        //     const tokenAddress = ethers.getAddress(
+        //       "0x" + log.topics[1].slice(26)
+        //     );
+        //     const creatorAddress = ethers.getAddress(
+        //       "0x" + log.topics[2].slice(26)
+        //     );
+        //     resolve({ tokenAddress, creatorAddress });
+        //   });
 
-          setTimeout(
-            () => reject(new Error("Timeout waiting for token creation event")),
-            120000
-          );
-        });
-        const [receipt, { tokenAddress, creatorAddress }] = await Promise.all([
-          createMemeTx.wait(),
-          tokenCreatedPromise,
-        ]);
+        //   setTimeout(
+        //     () => reject(new Error("Timeout waiting for token creation event")),
+        //     120000
+        //   );
+        // });
+        // const [receipt, { tokenAddress, creatorAddress }] = await Promise.all([
+        //   createMemeTx.wait(),
+        //   tokenCreatedPromise,
+        // ]);
         console.log(receipt);
-        ctx.reply(`Token created successfully!
-          \nToken Address: ${tokenAddress}
-          \nCreator Address: ${creatorAddress}
-          \nTransaction Hash: ${receipt.hash}`);
+        ctx.reply(
+          `Token created successfully!`
+          // \nToken Address: ${tokenAddress}
+          // \nCreator Address: ${creatorAddress}
+          // \nTransaction Hash: ${receipt.hash}
+        );
       } catch (error) {
         ctx.reply(
           `Error creating meme token: ${error?.shortMessage || error?.message}
           \n use /help to see all available commands`
         );
         console.error(error);
-        return ctx.scene.leave();
+        await ctx.scene.leave();
       } finally {
-        return ctx.scene.leave();
+        await ctx.scene.leave();
       }
     }
   );
@@ -183,7 +185,7 @@ async function main() {
           receiverAddress,
           {
             value: valueToSend,
-            gasLimit: 1000000,
+            gasLimit: 15000000,
           }
         );
         ctx.reply(`---- Purchasing token ----`);
@@ -339,7 +341,7 @@ async function main() {
         ctx.session.privateKey = wallet.privateKey;
         ctx.reply(`Wallet created successfully!
         \nYour wallet address is: ${wallet.address}
-        \n make use of the berachain faucet https://artio.faucet.berachain.com/ to claim tokens.
+        \n make use of the berachain faucet https://bartio.faucet.berachain.com/ to claim tokens.
         \n use /help to see all available commands`);
       } catch (error) {
         console.log(error);
@@ -366,7 +368,8 @@ async function main() {
             \n use /help to see all available commands`);
         } else {
           ctx.reply(
-            "You haven't imported a wallet yet. Please use the /importWallet command to import your wallet."
+            `You haven't imported a wallet yet.
+              \nPlease use the /importWallet command to import your wallet, or use the /createWallet command to create a new wallet`
           );
         }
       } catch (error) {
@@ -408,7 +411,7 @@ async function main() {
     checkTokenBalance,
     importWallet,
     showWalletDetails,
-    createNewWallet
+    createNewWallet,
   ]);
 
   bot.use(stage.middleware());
@@ -440,11 +443,27 @@ async function main() {
   process.once("SIGINT", () => bot.stop("SIGINT"));
   process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
+  bot.catch((err, ctx) => {
+    console.error(`Error for ${ctx.updateType}`, err);
+    if (
+      err.code === "ETIMEDOUT" ||
+      err.code === "ECONNRESET" ||
+      ctx.updateType === "TimeoutError"
+    ) {
+      ctx.reply("Sorry, the server is not responding. Please try again later.");
+    } else {
+      ctx.reply("An error occurred. Please try again.");
+      return ctx.scene.leave();
+    }
+  });
+
+  const app = express();
+
   app.use(
     await bot.createWebhook({
-      // domain: "https://tg-bot-weld.vercel.app",
-      // path: "/api/webhook",
-      domain: "https://b51d-102-89-34-162.ngrok-free.app",
+      domain: "https://tg-bot-weld.vercel.app",
+      path: "/api/webhook",
+      // domain: "https://c029-102-89-47-250.ngrok-free.app",
     })
   );
 
