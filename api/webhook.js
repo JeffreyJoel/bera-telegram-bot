@@ -31,20 +31,26 @@ async function main() {
   // const userAddress = wallet.address;
   // let userAddress;
 
-  const tradingHubAddress = `${process.env.TRADING_HUB_CONTRACT_ADDRESS}`;
-  const factoryAddress = `${process.env.FACTORY_CONTRACT_ADDRESS}`;
+  const tradingHubAddress = "0xdB1E607DF65aF60dA1bEe8Dd158b84121CA6Edc1";
+  const factoryAddress = "0x724Ddb73CaD9dBeB2D53eE0A69a7e9c2Fb16dF86";
 
   const tradingHubContract = new ethers.Contract(
-    tradingHubAddress,
+    "0xdB1E607DF65aF60dA1bEe8Dd158b84121CA6Edc1",
     tradingHubABI,
     provider
   );
   const factoryContract = new ethers.Contract(
-    factoryAddress,
+    "0x724Ddb73CaD9dBeB2D53eE0A69a7e9c2Fb16dF86",
     factoryAbi,
     provider
   );
 
+//   async function getMigrationValue(){
+//     const migrationValue = await tradingHubContract.tokenMigrated("0x32951bEd188C4b2c335D06db4171226Ef8562349");
+//     console.log(migrationValue);
+
+//   }
+// await getMigrationValue()
   await setBotDescription(bot);
 
   function generateCommandList() {
@@ -86,12 +92,13 @@ async function main() {
       try {
         const signer = validateAndGetSigner(ctx, provider);
         const factoryContractWithSigner = factoryContract.connect(signer);
-        const valueToSend = ethers.parseEther(`${value}`);
+        const valueToSend = ethers.parseEther(value);
         const createMemeTx = await factoryContractWithSigner.createNewMeme(
           tokenName,
           symbol,
           {
             value: valueToSend,
+            gasLimit: 20000000,
           }
         );
         console.log(createMemeTx);
@@ -171,21 +178,20 @@ async function main() {
       ctx.wizard.state.value = ctx.message.text;
       const { tokenAddress, minimumAmountOut, receiverAddress, value } =
         ctx.wizard.state;
+      console.log(tokenAddress, receiverAddress, value);
+
       try {
         const signer = validateAndGetSigner(ctx, provider);
         const tradingHubContractWithSigner = tradingHubContract.connect(signer);
-        const valueToSend = ethers.parseEther(`${value}`);
-        const parsedMinimumAmountOut = ethers.parseUnits(
-          `${minimumAmountOut}`,
-          18
-        );
+        const valueToSend = ethers.parseEther(value);
+        // const parsedMinimumAmountOut =  ethers.z;
         const buyTx = await tradingHubContractWithSigner.buy(
-          tokenAddress,
-          minimumAmountOut,
+         tokenAddress,
+          0,
           receiverAddress,
           {
             value: valueToSend,
-            gasLimit: 15000000,
+            gasLimit: 20000000,
           }
         );
         ctx.reply(`---- Purchasing token ----`);
@@ -231,26 +237,42 @@ async function main() {
     async (ctx) => {
       ctx.wizard.state.value = ctx.message.text;
       const { tokenAddress, amount, receiverAddress, value } = ctx.wizard.state;
+      // console.log(ctx.wizard.state);
+      
 
       try {
         const signer = validateAndGetSigner(ctx, provider);
         const tradingHubContractWithSigner = tradingHubContract.connect(signer);
-        const valueToSend = ethers.parseEther(`${value}`);
-        const amountToSell = ethers.parseUnits(`${amount}`, 18);
-        const sellTx = await tradingHubContractWithSigner.buy(
+        const valueToSend = ethers.parseEther(value);
+        // const amountToSell = ethers.parseUnits(amount, 18);
+        const tokenContract = new ethers.Contract(
           tokenAddress,
-          receiverAddress,
-          amountToSell,
-          {
-            value: valueToSend,
-            gasLimit: 30000000,
-          }
+          memeTokenAbi,
+          signer
         );
-        ctx.reply(`---- Selling token ----`);
-        const receipt = await sellTx.wait();
+        const approveTx = await tokenContract.approve(tradingHubAddress, amount);
+        ctx.reply(`---- Approving ----`);
 
-        console.log(receipt);
-        ctx.reply(`Token ${tokenAddress} sold successfully`);
+        const approveReceipt = await approveTx.wait()
+        console.log(approveReceipt);
+        
+        if(approveReceipt.status === 1){
+          const sellTx = await tradingHubContractWithSigner.sell(
+            tokenAddress,
+            receiverAddress,
+            amount,
+            {
+              value: valueToSend,
+              gasLimit: 20000000,
+            }
+          );
+          ctx.reply(`---- Selling token ----`);
+          const receipt = await sellTx.wait();
+  
+          console.log(receipt);
+          ctx.reply(`Token ${tokenAddress} sold successfully`);
+        }
+
       } catch (error) {
         ctx.reply(
           `Error selling token: ${error?.shortMessage || error?.message}
@@ -296,6 +318,7 @@ async function main() {
       }
     }
   );
+  
 
   const importWallet = new Scenes.WizardScene(
     "IMPORT_WALLET_WIZARD",
@@ -461,9 +484,9 @@ async function main() {
 
   app.use(
     await bot.createWebhook({
-      domain: "https://tg-bot-weld.vercel.app",
-      path: "/api/webhook",
-      // domain: "https://c029-102-89-47-250.ngrok-free.app",
+      // domain: "https://tg-bot-weld.vercel.app",
+      // path: "/api/webhook",
+      domain: "https://bf1d-102-89-47-29.ngrok-free.app",
     })
   );
 
