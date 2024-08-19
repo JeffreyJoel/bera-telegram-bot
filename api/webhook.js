@@ -20,37 +20,24 @@ async function main() {
 
   const bot = new Telegraf(`${BOT_TOKEN}`);
 
-  // const privateKey = `${process.env.PRIVATE_KEY}`;
-
   const provider = new ethers.JsonRpcProvider(
     "https://bartio.rpc.berachain.com"
   );
 
-  // const signer = new ethers.Wallet(privateKey, provider);
-  // const wallet = new ethers.Wallet(privateKey);
-  // const userAddress = wallet.address;
-  // let userAddress;
-
-  const tradingHubAddress = "0xdB1E607DF65aF60dA1bEe8Dd158b84121CA6Edc1";
-  const factoryAddress = "0x724Ddb73CaD9dBeB2D53eE0A69a7e9c2Fb16dF86";
+  const tradingHubAddress = "0x608d407fA33F179eA5070fddcEcED7A5e64d0063";
+  const factoryAddress = "0x03217b5073e872eFAdE8d4A4425800CaC9293398";
 
   const tradingHubContract = new ethers.Contract(
-    "0xdB1E607DF65aF60dA1bEe8Dd158b84121CA6Edc1",
+    "0x608d407fA33F179eA5070fddcEcED7A5e64d0063",
     tradingHubABI,
     provider
   );
   const factoryContract = new ethers.Contract(
-    "0x724Ddb73CaD9dBeB2D53eE0A69a7e9c2Fb16dF86",
+    factoryAddress,
     factoryAbi,
     provider
   );
 
-//   async function getMigrationValue(){
-//     const migrationValue = await tradingHubContract.tokenMigrated("0x32951bEd188C4b2c335D06db4171226Ef8562349");
-//     console.log(migrationValue);
-
-//   }
-// await getMigrationValue()
   await setBotDescription(bot);
 
   function generateCommandList() {
@@ -106,6 +93,7 @@ async function main() {
         ctx.reply(`--- Creating ${tokenName} token ----`);
         const receipt = await createMemeTx.wait();
 
+        ///This is to query the memetoken creation event to get back the token address and other token details
         // const eventSignature =
         //   "0x01fb0165fee40718cec1862fc8dd2dbd6fc0fdef7623971ac15ffd2daf21b986";
         // const filter = {
@@ -135,10 +123,12 @@ async function main() {
         // ]);
         console.log(receipt);
         ctx.reply(
-          `Token created successfully!`
+          `Token created successfully!
+          \nTransaction Hash: ${receipt.hash}
+          `
           // \nToken Address: ${tokenAddress}
           // \nCreator Address: ${creatorAddress}
-          // \nTransaction Hash: ${receipt.hash}
+          
         );
       } catch (error) {
         ctx.reply(
@@ -161,11 +151,6 @@ async function main() {
     },
     (ctx) => {
       ctx.wizard.state.tokenAddress = ctx.message.text;
-      ctx.reply("Please enter the minimum amount out:");
-      return ctx.wizard.next();
-    },
-    (ctx) => {
-      ctx.wizard.state.minimumAmountOut = ctx.message.text;
       ctx.reply("Please enter the receiver address:");
       return ctx.wizard.next();
     },
@@ -176,7 +161,7 @@ async function main() {
     },
     async (ctx) => {
       ctx.wizard.state.value = ctx.message.text;
-      const { tokenAddress, minimumAmountOut, receiverAddress, value } =
+      const { tokenAddress, receiverAddress, value } =
         ctx.wizard.state;
       console.log(tokenAddress, receiverAddress, value);
 
@@ -184,9 +169,8 @@ async function main() {
         const signer = validateAndGetSigner(ctx, provider);
         const tradingHubContractWithSigner = tradingHubContract.connect(signer);
         const valueToSend = ethers.parseEther(value);
-        // const parsedMinimumAmountOut =  ethers.z;
         const buyTx = await tradingHubContractWithSigner.buy(
-         tokenAddress,
+          tokenAddress,
           0,
           receiverAddress,
           {
@@ -198,7 +182,8 @@ async function main() {
         console.log(buyTx);
         const receipt = await buyTx.wait();
         console.log(receipt);
-        ctx.reply(`Token ${tokenAddress} purchased successfully`);
+        ctx.reply(`Token ${tokenAddress} purchased successfully 
+        \nTransaction Hash: ${receipt.hash}`);
       } catch (error) {
         ctx.reply(
           `Error purchasing token: ${error?.shortMessage || error?.message}
@@ -237,42 +222,43 @@ async function main() {
     async (ctx) => {
       ctx.wizard.state.value = ctx.message.text;
       const { tokenAddress, amount, receiverAddress, value } = ctx.wizard.state;
-      // console.log(ctx.wizard.state);
-      
 
       try {
         const signer = validateAndGetSigner(ctx, provider);
         const tradingHubContractWithSigner = tradingHubContract.connect(signer);
         const valueToSend = ethers.parseEther(value);
-        // const amountToSell = ethers.parseUnits(amount, 18);
+        const amountToSell = ethers.parseUnits(amount, 18);
         const tokenContract = new ethers.Contract(
           tokenAddress,
           memeTokenAbi,
           signer
         );
-        const approveTx = await tokenContract.approve(tradingHubAddress, amount);
+        const approveTx = await tokenContract.approve(
+          tradingHubAddress,
+          amountToSell
+        );
         ctx.reply(`---- Approving ----`);
 
-        const approveReceipt = await approveTx.wait()
+        const approveReceipt = await approveTx.wait();
         console.log(approveReceipt);
-        
-        if(approveReceipt.status === 1){
+
+        if (approveReceipt.status === 1) {
           const sellTx = await tradingHubContractWithSigner.sell(
             tokenAddress,
             receiverAddress,
-            amount,
+            amountToSell,
             {
-              value: valueToSend,
               gasLimit: 20000000,
             }
           );
           ctx.reply(`---- Selling token ----`);
           const receipt = await sellTx.wait();
-  
-          console.log(receipt);
-          ctx.reply(`Token ${tokenAddress} sold successfully`);
-        }
 
+          console.log(receipt);
+          ctx.reply(
+          `Token ${tokenAddress} sold successfully 
+          \nTransaction Hash: ${receipt.hash}`);
+        }
       } catch (error) {
         ctx.reply(
           `Error selling token: ${error?.shortMessage || error?.message}
@@ -302,6 +288,7 @@ async function main() {
           memeTokenAbi,
           provider
         );
+
         const userAddress = ctx.session.userAddress;
         const balance = await tokenContract.balanceOf(userAddress);
         ctx.reply(`---- Fetching balance ----`);
@@ -318,7 +305,6 @@ async function main() {
       }
     }
   );
-  
 
   const importWallet = new Scenes.WizardScene(
     "IMPORT_WALLET_WIZARD",
@@ -484,9 +470,9 @@ async function main() {
 
   app.use(
     await bot.createWebhook({
-      // domain: "https://tg-bot-weld.vercel.app",
-      // path: "/api/webhook",
-      domain: "https://bf1d-102-89-47-29.ngrok-free.app",
+      domain: "https://tg-bot-weld.vercel.app",
+      path: "/api/webhook",
+      // domain: "https://0b07-102-89-84-157.ngrok-free.app",
     })
   );
 

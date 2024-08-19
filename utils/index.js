@@ -24,6 +24,7 @@ function generateAccount(phrase, index = 0) {
   };
 }
 
+//This gets a signer based on the stored private key
 function validateAndGetSigner(ctx, provider) {
   if (!ctx.session.privateKey) {
     throw new Error(
@@ -40,6 +41,7 @@ function validateAndGetSigner(ctx, provider) {
   return new ethers.Wallet(privateKey, provider);
 }
 
+//This sets the bot description message before the first interaction with the bot
 async function setBotDescription(bot) {
   try {
     await bot.telegram.setMyDescription(
