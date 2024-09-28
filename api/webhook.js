@@ -1,18 +1,67 @@
 const { Telegraf, Scenes, session, Markup } = require("telegraf");
 const { ethers } = require("ethers");
 const express = require("express");
+const AWS = require("aws-sdk");
 const {
   generateAccount,
   validateAndGetSigner,
-  setBotDescription,
   createNewAccount,
 } = require("../utils/index.js");
 
 const tradingHubABI = require("../constants/tradingHubAbi.json");
 const factoryAbi = require("../constants/factoryAbi.json");
 const memeTokenAbi = require("../constants/memeTokenAbi.json");
+const { decrypt } = require("../utils/encryption.js");
 
 require("dotenv").config();
+
+AWS.config.update({
+  region: process.env.AWS_REGION,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+});
+
+const dynamodb = new AWS.DynamoDB();
+const TABLE_NAME = "WalletTable";
+
+
+async function setWallet(userId, wallet) {
+  const params = {
+    TableName: TABLE_NAME,
+    Item: AWS.DynamoDB.Converter.marshall({
+      userId: userId.toString(),
+      wallet: wallet,
+    }),
+  };
+
+  try {
+    await dynamodb.putItem(params).promise();
+    console.log("Wallet saved successfully");
+  } catch (error) {
+    console.error("Error saving wallet:", error);
+  }
+}
+
+async function getWallet(userId) {
+  const params = {
+    TableName: TABLE_NAME,
+    Key: {
+      userId: { S: userId.toString() }, // 'S' specifies a string type
+    },
+  };
+
+  try {
+    const data = await dynamodb.getItem(params).promise();
+    if (data.Item) {
+      // Parse the wallet data from DynamoDB format
+      return AWS.DynamoDB.Converter.unmarshall(data.Item).wallet;
+    }
+    return null;
+  } catch (error) {
+    console.error("Error getting wallet:", error);
+    return null;
+  }
+}
 
 async function main() {
   const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -38,46 +87,77 @@ async function main() {
     provider
   );
 
-  await setBotDescription(bot);
-
-  function generateCommandList() {
-    return `Here are all available commands:
-      \n/start - Start the bot and see this message
-      \n/help - Show this help message
-      \n/createWallet - Create a new wallet
-      \n/importWallet - Import an existing wallet
-      \n/showWalletAddress - View your wallet address
-      \n/createNewMemeToken - Create a new token
-      \n/buy - Purchase a token
-      \n/sell - Sell a token
-      \n/checkBalance - Check your token balance
-      \n/cancel - Cancel ongoing command`;
-  }
-
   // using scenes to achieve better ux
   const createTokenWizard = new Scenes.WizardScene(
     "CREATE_TOKEN_WIZARD",
     (ctx) => {
-      ctx.reply("Please enter the token name:");
+      ctx.reply(
+        "Please enter the token name:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.tokenName = ctx.message.text;
-      ctx.reply("Please enter the token symbol:");
+      ctx.reply(
+        "Please enter the token symbol:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.symbol = ctx.message.text;
-      ctx.reply("Please enter the value in ETH to send:");
+      ctx.reply(
+        "Please enter the value in ETH to send:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
 
     async (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.value = ctx.message.text;
       const { tokenName, symbol, value } = ctx.wizard.state;
+      const userId = ctx.from.id;
 
       try {
-        const signer = validateAndGetSigner(ctx, provider);
+        let wallet = await getWallet(userId);
+        const signer = validateAndGetSigner(wallet, provider);
         const factoryContractWithSigner = factoryContract.connect(signer);
         const valueToSend = ethers.parseEther(value);
         const createMemeTx = await factoryContractWithSigner.createNewMeme(
@@ -90,7 +170,7 @@ async function main() {
         );
         console.log(createMemeTx);
 
-        ctx.reply(`--- Creating ${tokenName} token ----`);
+        ctx.reply(`Please wait, token creation is in progress...`);
         const receipt = await createMemeTx.wait();
 
         ///This is to query the memetoken creation event to get back the token address and other token details
@@ -123,12 +203,11 @@ async function main() {
         // ]);
         console.log(receipt);
         ctx.reply(
-          `Token created successfully!
-          \nTransaction Hash: ${receipt.hash}
+          `Token created successfully!! 🎉
+          \nTransaction Hash: https://bartio.beratrail.io/tx/${receipt.hash}
           `
           // \nToken Address: ${tokenAddress}
           // \nCreator Address: ${creatorAddress}
-          
         );
       } catch (error) {
         ctx.reply(
@@ -146,27 +225,75 @@ async function main() {
   const buyTokenWizard = new Scenes.WizardScene(
     "BUY_TOKEN_WIZARD",
     (ctx) => {
-      ctx.reply("Please enter the token address:");
+      ctx.reply(
+        "Please enter the token address:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.tokenAddress = ctx.message.text;
-      ctx.reply("Please enter the receiver address:");
+      ctx.reply(
+        "Please enter the receiver address:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.receiverAddress = ctx.message.text;
-      ctx.reply("Please enter the amount of ETH to send:");
+      ctx.reply(
+        "Please enter the amount of ETH to send:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     async (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.value = ctx.message.text;
-      const { tokenAddress, receiverAddress, value } =
-        ctx.wizard.state;
+      const { tokenAddress, receiverAddress, value } = ctx.wizard.state;
       console.log(tokenAddress, receiverAddress, value);
 
+      const userId = ctx.from.id;
+
       try {
-        const signer = validateAndGetSigner(ctx, provider);
+        let wallet = await getWallet(userId);
+
+        const signer = validateAndGetSigner(wallet, provider);
         const tradingHubContractWithSigner = tradingHubContract.connect(signer);
         const valueToSend = ethers.parseEther(value);
         const buyTx = await tradingHubContractWithSigner.buy(
@@ -178,12 +305,13 @@ async function main() {
             gasLimit: 20000000,
           }
         );
-        ctx.reply(`---- Purchasing token ----`);
+        ctx.reply(`Please wait, purchase transaction is in progress...`);
+
         console.log(buyTx);
         const receipt = await buyTx.wait();
         console.log(receipt);
-        ctx.reply(`Token ${tokenAddress} purchased successfully 
-        \nTransaction Hash: ${receipt.hash}`);
+        ctx.reply(`Token ${tokenAddress} purchased successfully!! 🎉
+        \nTransaction Hash: https://bartio.beratrail.io/tx/${receipt.hash}`);
       } catch (error) {
         ctx.reply(
           `Error purchasing token: ${error?.shortMessage || error?.message}
@@ -201,30 +329,94 @@ async function main() {
   const sellTokenWizard = new Scenes.WizardScene(
     "SELL_TOKEN_WIZARD",
     (ctx) => {
-      ctx.reply("Please enter the token address:");
+      ctx.reply(
+        "Please enter the token address:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
+
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.tokenAddress = ctx.message.text;
-      ctx.reply("Please enter amount of tokens:");
+      ctx.reply(
+        "Please enter amount of tokens:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.amount = ctx.message.text;
-      ctx.reply("Please enter the receiver address:");
+      ctx.reply(
+        "Please enter the receiver address:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.receiverAddress = ctx.message.text;
-      ctx.reply("Please enter the amount of ETH to send:");
+      ctx.reply(
+        "Please enter the value in ETH to send:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     async (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.value = ctx.message.text;
       const { tokenAddress, amount, receiverAddress, value } = ctx.wizard.state;
+      const userId = ctx.from.id;
 
       try {
-        const signer = validateAndGetSigner(ctx, provider);
+        let wallet = await getWallet(userId);
+
+        const signer = validateAndGetSigner(wallet, provider);
         const tradingHubContractWithSigner = tradingHubContract.connect(signer);
         const valueToSend = ethers.parseEther(value);
         const amountToSell = ethers.parseUnits(amount, 18);
@@ -237,7 +429,9 @@ async function main() {
           tradingHubAddress,
           amountToSell
         );
-        ctx.reply(`---- Approving ----`);
+        ctx.reply(
+          `Please wait, we're approving the contract to sell your tokens...`
+        );
 
         const approveReceipt = await approveTx.wait();
         console.log(approveReceipt);
@@ -251,13 +445,14 @@ async function main() {
               gasLimit: 20000000,
             }
           );
-          ctx.reply(`---- Selling token ----`);
+          ctx.reply(`Please wait, we're selling your tokens...`);
           const receipt = await sellTx.wait();
 
           console.log(receipt);
           ctx.reply(
-          `Token ${tokenAddress} sold successfully 
-          \nTransaction Hash: ${receipt.hash}`);
+            `Token ${tokenAddress} sold successfully!! 🎉
+          \nTransaction Hash: https://bartio.beratrail.io/tx/${receipt.hash}`
+          );
         }
       } catch (error) {
         ctx.reply(
@@ -275,24 +470,44 @@ async function main() {
   const checkTokenBalance = new Scenes.WizardScene(
     "CHECK_TOKEN_BALANCE_WIZARD",
     (ctx) => {
-      ctx.reply("Please enter the token address:");
+      ctx.reply(
+        "Please enter the token address:",
+        Markup.inlineKeyboard([
+          Markup.button.callback("🚫 Cancel operation", "cancel"),
+        ])
+      );
       return ctx.wizard.next();
     },
     async (ctx) => {
+      if (
+        ctx.updateType === "callback_query" &&
+        ctx.update.callback_query.data === "cancel"
+      ) {
+        ctx.reply(
+          `Operation cancelled.`,
+          Markup.inlineKeyboard([Markup.button.callback("❓Help", "help")])
+        );
+        return ctx.scene.leave();
+      }
       ctx.wizard.state.tokenAddress = ctx.message.text;
       const { tokenAddress } = ctx.wizard.state;
 
+      const userId = ctx.from.id;
+
       try {
+        let wallet = await getWallet(userId);
+        console.log(wallet);
+        const userAddress = wallet?.address;
+
         const tokenContract = new ethers.Contract(
           tokenAddress,
           memeTokenAbi,
           provider
         );
-
-        const userAddress = ctx.session.userAddress;
         const balance = await tokenContract.balanceOf(userAddress);
-        ctx.reply(`---- Fetching balance ----`);
-        ctx.reply(`Your balance is ${ethers.formatUnits(balance, 18)}`);
+        ctx.reply(`Please wait, we're fetching your balance... `);
+        ctx.reply(`Balance fetched!! 🎉
+          /n Your balance is ${ethers.formatUnits(balance, 18)}`);
       } catch (error) {
         ctx.reply(
           `Error fetching balance: ${error?.shortMessage || error?.message}
@@ -370,11 +585,30 @@ async function main() {
   const showWalletDetails = new Scenes.WizardScene(
     "GET_WALLET_WIZARD",
     async (ctx) => {
-      const userAddress = ctx.session.userAddress;
+      const userId = ctx.from.id;
+
       try {
+        let wallet = await getWallet(userId);
+        // console.log(wallet);
+        let formattedBalance;
+        const userAddress = wallet?.address;
+        
+        if (wallet) {
+          const balance = await provider.getBalance(wallet.address);
+          formattedBalance = ethers.formatEther(balance);
+        }
+        const privateKey = wallet?.privateKey;
         if (userAddress) {
-          ctx.reply(`Your wallet address is: ${userAddress}
-            \n use /help to see all available commands`);
+          ctx.reply(
+            `
+            💰 Wallet Details
+            \n Your wallet address is:\n\`${userAddress}\`\n 
+            \n Your private key is: \n\`${decrypt(privateKey)}\`\n 
+             \n ⚠️ IMPORTANT: Always remember to keep your private key secure.
+            \nYour wallet balance is: ${formattedBalance} BERA  
+            \n use /help to see all available commands`,
+            { parse_mode: "Markdown" }
+          );
         } else {
           ctx.reply(
             `You haven't imported a wallet yet.
@@ -390,14 +624,59 @@ async function main() {
     }
   );
 
+  function generateInlineButtons() {
+    return Markup.inlineKeyboard([
+      // [
+      //   Markup.button.callback("🔨 Create Wallet", "createWallet"),
+      //   Markup.button.callback("📥 Import Wallet", "importWallet"),
+      // ],
+      [Markup.button.callback("🪙 Create Meme Token", "createNewMemeToken")],
+      [Markup.button.callback("👁️ Show Wallet Details", "showWalletAddress")],
+      [
+        Markup.button.callback("💰 Buy", "buy"),
+        Markup.button.callback("🤑 Sell", "sell"),
+      ],
+      [
+        Markup.button.callback("💼 Check Balance", "checkBalance"),
+        Markup.button.callback("❓ Help", "help"),
+      ],
+    ]);
+  }
+
   async function sendWelcomeMessage(ctx) {
-    ctx.reply(
-      `Welcome to BondingTestBot!
-     \n${generateCommandList()}`
+    const userId = ctx.from.id;
+    let wallet = await getWallet(userId);
+
+    if (!wallet) {
+      wallet = createNewAccount();
+      await setWallet(userId, wallet);
+    }
+    let formattedBalance;
+  
+    if (wallet) {
+      const balance = await provider.getBalance(wallet.address);
+      formattedBalance = ethers.formatEther(balance);
+    }
+
+    const walletInfo = `
+  🎉 Welcome to LootBot! 🤖
+  
+  📬 We've automatically created the wallet below to allow you interact with this bot: 
+  \n\`${wallet.address}\`\n\nYour wallet balance is: ${formattedBalance} BERA\n\nMake use of the Berachain faucet https://bartio.faucet.berachain.com/ to claim tokens to interact with this bot.
+    `;
+
+    await ctx.reply(walletInfo, { parse_mode: "Markdown" });
+    await ctx.reply(
+      "Here are the available commands:",
+      generateInlineButtons()
     );
   }
+
   async function sendHelpMessage(ctx) {
-    ctx.reply(generateCommandList());
+    await ctx.reply(
+      "Here are the available commands:",
+      generateInlineButtons()
+    );
   }
 
   function createCancelCommand(operationName) {
@@ -426,22 +705,33 @@ async function main() {
   bot.use(stage.middleware());
 
   bot.command("start", sendWelcomeMessage);
+  bot.action("help", sendHelpMessage);
   bot.command("help", sendHelpMessage);
-  bot.command("createNewMemeToken", (ctx) =>
+
+  bot.action("createNewMemeToken", (ctx) =>
     ctx.scene.enter("CREATE_TOKEN_WIZARD")
   );
-  bot.command("buy", (ctx) => ctx.scene.enter("BUY_TOKEN_WIZARD"));
-  bot.command("sell", (ctx) => ctx.scene.enter("SELL_TOKEN_WIZARD"));
+  bot.action("buy", (ctx) => ctx.scene.enter("BUY_TOKEN_WIZARD"));
+  bot.action("sell", (ctx) => ctx.scene.enter("SELL_TOKEN_WIZARD"));
 
-  bot.command("checkBalance", (ctx) =>
+  bot.action("checkBalance", (ctx) =>
     ctx.scene.enter("CHECK_TOKEN_BALANCE_WIZARD")
   );
-  bot.command("importWallet", (ctx) => ctx.scene.enter("IMPORT_WALLET_WIZARD"));
-  bot.command("createWallet", (ctx) => ctx.scene.enter("CREATE_WALLET_WIZARD"));
+  bot.action("importWallet", (ctx) => ctx.scene.enter("IMPORT_WALLET_WIZARD"));
+  bot.action("createWallet", (ctx) => ctx.scene.enter("CREATE_WALLET_WIZARD"));
 
-  bot.command("showWalletAddress", (ctx) =>
+  bot.action("showWalletAddress", (ctx) =>
     ctx.scene.enter("GET_WALLET_WIZARD")
   );
+  bot.action("cancel", (ctx) => {
+    ctx.reply(
+      `Operation cancelled.`,
+      Markup.inlineKeyboard([
+        Markup.button.callback("🚫 Cancel operation", "cancel"),
+      ])
+    );
+    return ctx.scene.leave();
+  });
   // Apply cancel command to each wizard
   applyCancelCommand(createTokenWizard, "Token creation");
   applyCancelCommand(buyTokenWizard, "Token purchase");
@@ -472,7 +762,7 @@ async function main() {
     await bot.createWebhook({
       domain: "https://tg-bot-weld.vercel.app",
       path: "/api/webhook",
-      // domain: "https://0b07-102-89-84-157.ngrok-free.app",
+      // domain: "https://7072-102-89-75-254.ngrok-free.app",
     })
   );
 

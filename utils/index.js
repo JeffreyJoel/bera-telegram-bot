@@ -25,13 +25,13 @@ function generateAccount(phrase, index = 0) {
 }
 
 //This gets a signer based on the stored private key
-function validateAndGetSigner(ctx, provider) {
-  if (!ctx.session.privateKey) {
+function validateAndGetSigner(wallet, provider) {
+  if (!wallet?.privateKey) {
     throw new Error(
       "No private key found in session. Please import a wallet first."
     );
   }
-  const decryptedPrivateKey = decrypt(ctx.session.privateKey);
+  const decryptedPrivateKey = decrypt(wallet?.privateKey);
   const privateKey = decryptedPrivateKey.startsWith("0x")
     ? decryptedPrivateKey.slice(2)
     : decryptedPrivateKey;
